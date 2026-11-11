@@ -74,7 +74,55 @@
                     accept=".ulviewer,.zip"
                 >
             </div>
-        
+
+            <!-- Load from a web link (e.g. Dropbox) -->
+            <div id="linkBox">
+
+                <div class="toolbar-group">
+                    <input
+                        type="url"
+                        id="dataLinkInput"
+                        placeholder="or paste a link to a .ulviewer file"
+                        title="Link to a .ulviewer file, e.g. a Dropbox share link"
+                    >
+
+                    <button id="loadLinkBtn">
+                        Load link
+                    </button>
+                </div>
+
+                <!-- Shown once a dataset has been loaded from a link -->
+                <div
+                    id="linkActions"
+                    class="toolbar-group"
+                >
+                    <button
+                        id="copyShareLinkBtn"
+                        title="Copy a viewer link that opens this dataset"
+                        style="display:none;"
+                    >
+                        Copy share link
+                    </button>
+
+                    <button
+                        id="downloadAllBtn"
+                        title="Download the whole dataset into this browser tab so layers switch on faster. Nothing is saved to disk or uploaded."
+                        style="display:none;"
+                    >
+                        Download all
+                    </button>
+
+                    <button
+                        id="saveFileBtn"
+                        title="Save the .ulviewer file to this computer (downloads folder), to open later with 'Choose file'"
+                        style="display:none;"
+                    >
+                        Save file
+                    </button>
+                </div>
+
+            </div>
+
         </div>
 
         <div class="toolbar-divider"></div>
@@ -159,6 +207,45 @@
                                 value="1"
                             >
                         </div>
+
+                        <!-- CLUSTERS (disabled for now)
+                        <div class="control-item">
+                            <div class="control-label">
+                                Cell Fill
+                            </div>
+
+                            <select id="cellFillSelect">
+                                <option value="">None</option>
+                                <option value="csv">Load clusters (CSV)…</option>
+                            </select>
+
+                            <input
+                                type="file"
+                                id="clusterFile"
+                                accept=".csv,.tsv,.txt,.gz"
+                                style="display:none;"
+                            >
+                        </div>
+
+                        <div
+                            class="control-item"
+                            id="cellFillOpacityItem"
+                            style="display:none;"
+                        >
+                            <div class="control-label">
+                                Fill Opacity
+                            </div>
+
+                            <input
+                                type="range"
+                                id="cellFillOpacity"
+                                min="0"
+                                max="1"
+                                step="0.05"
+                                value="0.5"
+                            >
+                        </div>
+                        END CLUSTERS -->
 
                         <label class="control-checkbox">
                             <input
@@ -328,6 +415,13 @@
                 No cell selected
             </div>
 
+            <!-- CLUSTERS (disabled for now): cluster legend (cell fills)
+            <div id="clusterLegend"></div>
+            END CLUSTERS -->
+
+            <!-- Loading / error messages -->
+            <div id="statusMsg"></div>
+
         </div>
 
         <!-- Gene panel (right) -->
@@ -406,19 +500,6 @@
 
 </div>
 
-
-<div id="legacyControls" style="display:none;">
-
-    <input
-        id="urlInput"
-        type="text"
-    >
-
-    <button id="loadUrlBtn">
-        Load URL
-    </button>
-
-</div>
 
 <!-- END TEMPORARY -->
 

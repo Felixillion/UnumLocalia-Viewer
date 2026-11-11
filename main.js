@@ -1,6 +1,18 @@
 // .ulviewer load
 let loadedZip = null;
 
+// .ulviewer streamed from a web link (only the parts needed are downloaded)
+let remoteZip = null;
+
+// Folder inside the zip that holds metadata.json ("" unless the zip wraps everything in a folder)
+let zipPrefix = "";
+
+// Link the current dataset was loaded from (if any)
+let currentDataLink = null;
+
+// Whole linked file, once it has been downloaded (kept so it can be saved to disk)
+let downloadedBlob = null;
+
 // Metadata
 let metadata = null;
 let metadataFileHandle = null;
@@ -28,6 +40,16 @@ let datasetRoot = "";
 let proteinLayers = {};
 let proteinOpacity = 0.8;
 let proteinCanvas = null;
+
+// CLUSTERS (disabled for now): remove the "// " from these lines to bring cell fills back
+// // Cell fills (clusters / annotations)
+// let cellAnnotations = {};      // name -> Map(cell_id -> label), or a file path still to be loaded
+// let activeAnnotation = "";     // name of the annotation used to fill cells ("" = no fill)
+// let cellLabels = [];           // label for each cell in segmentationData (active annotation)
+// let clusterColors = {};        // label -> colour (active annotation)
+// let clusterCounts = {};        // label -> number of cells (active annotation)
+// let hiddenClusters = new Set();
+// let cellFillOpacity = 0.5;
 
 // Cell info
 let selectedCell = null;
@@ -186,11 +208,23 @@ async function loadUlviewer(file) {
             file
         );
 
+    remoteZip = null;
+
     datasetRoot = "";
+
+    clearDataLink();
+
+    // Allow for zips that wrap the dataset in a folder
+    zipPrefix =
+        findZipPrefix(
+            Object.keys(
+                loadedZip.files
+            )
+        );
 
     const metadataText =
         await loadedZip
-            .file("metadata.json")
+            .file(zipPrefix + "metadata.json")
             .async("string");
 
     metadata =
@@ -221,6 +255,14 @@ async function loadUlviewer(file) {
 async function initialiseDataset() {
     geneList.innerHTML = "";
     proteinList.innerHTML = "";
+
+    // Datasets without one of the modalities
+    metadata.genes = metadata.genes || {};
+    metadata.proteins = metadata.proteins || {};
+    metadata.segmentations = metadata.segmentations || {};
+
+    // Clear anything left over from a previously loaded dataset
+    resetDatasetState();
 
     allGenes =
         Object.keys(
@@ -261,6 +303,10 @@ async function initialiseDataset() {
 
     if (viewer) {
         viewer.destroy();
+
+        // Its overlay canvas went with it; a new one is made when the image opens
+        overlayCanvas = null;
+        overlayCtx = null;
     }
 
     viewer =
@@ -299,10 +345,17 @@ async function initialiseDataset() {
 // Blob loader
 async function getBlob(path) {
 
+    if (remoteZip) {
+
+        return new Blob([
+            await remoteZip.read(path)
+        ]);
+    }
+
     if (loadedZip) {
 
         return await loadedZip
-            .file(path)
+            .file(zipPrefix + path)
             .async("blob");
     }
 
@@ -318,10 +371,15 @@ async function getBlob(path) {
 // Gzip loader
 async function getCompressedFile(path) {
 
+    if (remoteZip) {
+
+        return await remoteZip.read(path);
+    }
+
     if (loadedZip) {
 
         return await loadedZip
-            .file(path)
+            .file(zipPrefix + path)
             .async(
                 "uint8array"
             );
@@ -502,6 +560,17 @@ function saveScreenshot() {
         );
     }
 
+    // CLUSTERS (disabled for now)
+    // // Cluster legend (when cells are filled by cluster)
+    // if (
+    //     exportSegs.checked
+    // ) {
+    //
+    //     drawClusterLegendToContext(
+    //         exportCtx
+    //     );
+    // }
+
     // Scale bar
     if (
         exportScaleBar.checked
@@ -582,6 +651,9 @@ function drawGenesToContext(targetCtx) {
 
 // Screenshot segmentations
 function drawSegmentationsToContext(targetCtx) {
+
+    // CLUSTERS (disabled for now)
+    // drawCellFills(targetCtx);
 
     for (
         const cell
@@ -909,6 +981,9 @@ function drawScaleBar(ctx) {
 
 
 function drawSegmentations(ctx) {
+
+    // CLUSTERS (disabled for now)
+    // drawCellFills(overlayCtx);
 
     for (
         const cell
@@ -1267,6 +1342,11 @@ function rebuildProteinCache(layer) {
 
 // Active layers
 function refreshActiveLayers() {
+
+    // Keep the cell info panel in step with the loaded layers
+    if (selectedCell) {
+        renderCellInfo(selectedCell);
+    }
 
     const activeProteins =
         document.getElementById(
@@ -1797,77 +1877,8 @@ function selectCellAtPoint(x, y) {
             selectedCell =
                 cell;
 
-            const area =
-                calculatePolygonArea(
-                    cell.vertices
-                );
-
-            const centroid =
-                calculateCentroid(
-                    cell.vertices
-                );
-            
-            // Gene count
-            const transcriptCount =
-                countGenesInCell(
-                    cell
-                );
-
             // Selected cell information panel
-            cellInfo.innerHTML =
-                `
-                <b>Cell Selected</b><br>
-
-                Cell ID:
-                ${
-                    cell.cell_id ??
-                    "Unknown"
-                }
-                <br>
-
-                Vertices:
-                ${
-                    cell.vertices.length
-                }
-                <br>
-
-                Area:
-                ${
-                    Math.round(area)
-                }
-                px²
-                <br>
-
-                Centroid:
-                (
-                ${
-                    Math.round(
-                        centroid.x
-                    )
-                },
-                ${
-                    Math.round(
-                        centroid.y
-                    )
-                }
-                )
-
-                <br>
-
-                <b>Genes</b><br>
-
-                ${
-                    Object.entries(
-                        transcriptCount
-                    )
-                    .map(
-                        ([gene, count]) =>
-                            `${gene}: ${count}`
-                    )
-                    .join("<br>")
-                }
-
-                `;
+            renderCellInfo(cell);
 
             cellInfo.style.display =
                 "block";
@@ -2803,44 +2814,14 @@ document.addEventListener(
     }
 );
 
-// Load data from web link
-const loadUrlBtn =
-    document.getElementById(
-        "loadUrlBtn"
-    );
-
-if (loadUrlBtn) {
-
-    loadUrlBtn.addEventListener(
-        "click",
-        async () => {
-
-            const url =
-                document
-                .getElementById(
-                    "urlInput"
-                )
-                .value;
-
-            const response =
-                await fetch(
-                    url
-                );
-
-            const fileBlob =
-                await response.blob();
-
-            await loadUlviewer(
-                fileBlob
-            );
-        }
-    );
-}
-
 // Load demo dataset
 async function loadDemoDataset() {
 
     loadedZip = null;
+    remoteZip = null;
+    zipPrefix = "";
+
+    clearDataLink();
 
     datasetRoot = "./data";
 
@@ -2886,10 +2867,24 @@ document
         "click",
         async () => {
 
+            // Xenium cells by default, otherwise the first segmentation in the dataset
             const filename =
                 metadata.segmentations[
                     "xenium_cells"
-                ];
+                ] ??
+                Object.values(
+                    metadata.segmentations
+                )[0];
+
+            if (!filename) {
+
+                showStatus(
+                    "This dataset has no cell segmentations.",
+                    true
+                );
+
+                return;
+            }
 
             console.log(
                 "Segmentation:",
@@ -2931,6 +2926,9 @@ document
                     "segmentationControls"
                 )
                 .style.display = "flex";
+
+            // CLUSTERS (disabled for now): cluster / annotation options for cell fills
+            // initCellAnnotations();
 
             // Count number of segmentations loaded
             window.goatcounter?.count({
@@ -3121,3 +3119,2520 @@ document
         }
     );
 
+
+
+// ======================================================================
+// Shared helpers
+// ======================================================================
+
+// Escape text before placing it in innerHTML
+function escapeHtml(value) {
+
+    return String(value).replace(
+        /[&<>"']/g,
+        ch => ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#39;"
+        })[ch]
+    );
+}
+
+
+// Status message shown over the viewer (loading progress, errors)
+let statusTimer = null;
+
+function showStatus(message, isError = false) {
+
+    const box =
+        document.getElementById("statusMsg");
+
+    clearTimeout(statusTimer);
+
+    box.textContent = message;
+
+    box.classList.toggle("error", isError);
+
+    box.style.display = "block";
+
+    // Errors stay until dismissed (click) or replaced
+    if (isError) {
+        console.warn(message);
+    }
+}
+
+function hideStatus(delayMs = 0) {
+
+    clearTimeout(statusTimer);
+
+    statusTimer =
+        setTimeout(
+            () => {
+                document
+                    .getElementById("statusMsg")
+                    .style.display = "none";
+            },
+            delayMs
+        );
+}
+
+document
+    .getElementById("statusMsg")
+    .addEventListener(
+        "click",
+        event => {
+
+            // Don't let the click fall through to the viewer
+            event.stopPropagation();
+
+            hideStatus();
+        }
+    );
+
+
+// Folder (inside a zip) that contains metadata.json
+function findZipPrefix(names) {
+
+    const candidates =
+        names
+            .filter(
+                name =>
+                    !name.startsWith("__MACOSX/") &&
+                    (
+                        name === "metadata.json" ||
+                        name.endsWith("/metadata.json")
+                    )
+            )
+            .sort(
+                (a, b) => a.length - b.length
+            );
+
+    if (!candidates.length) {
+
+        throw new Error(
+            "This file doesn't look like a UnumLocalia export (no metadata.json inside)."
+        );
+    }
+
+    return candidates[0].slice(
+        0,
+        candidates[0].length - "metadata.json".length
+    );
+}
+
+
+// Clear layers/cells/clusters when a new dataset is opened
+function resetDatasetState() {
+
+    geneLayers = {};
+    proteinLayers = {};
+
+    segmentationData = [];
+    selectedCell = null;
+    hoveredCell = null;
+
+    cellInfo.style.display = "none";
+
+    enableCellSelection.checked = false;
+    cellSelectionEnabled = false;
+
+    document
+        .getElementById("loadSegBtn")
+        .style.display = "";
+
+    document
+        .getElementById("segmentationControls")
+        .style.display = "";
+
+    // CLUSTERS (disabled for now)
+    // resetCellAnnotations();
+
+    refreshGeneUI();
+    refreshProteinUI();
+    refreshActiveLayers();
+}
+
+
+// ======================================================================
+// Load a dataset from a web link
+//
+// A viewer address ending in  #data=<link>  opens that dataset straight
+// away, so a single link can be shared. The link sits after the "#", which
+// browsers never send to a server, so it is not seen by GitHub Pages or
+// the visit counter.
+//
+// <link> can point to
+//   - a .ulviewer / .zip file (e.g. a Dropbox share link), or
+//   - a folder (or its metadata.json) on any host that allows other
+//     websites to read its files (GitHub Pages, S3/R2 with CORS, ...).
+// ======================================================================
+
+// Turn a share link into one the browser is allowed to read
+function normaliseDataUrl(rawUrl) {
+
+    let url;
+
+    try {
+
+        url = new URL(rawUrl.trim());
+
+    } catch (error) {
+
+        throw new Error(
+            "That doesn't look like a web link."
+        );
+    }
+
+    const host =
+        url.hostname.toLowerCase();
+
+    // Dropbox: the share page doesn't allow other sites to read it, the download host does
+    if (
+        host === "www.dropbox.com" ||
+        host === "dropbox.com"
+    ) {
+
+        if (url.pathname.startsWith("/scl/fo/")) {
+
+            throw new Error(
+                "That is a link to a Dropbox folder. Share the .ulviewer file itself instead."
+            );
+        }
+
+        url.hostname = "dl.dropboxusercontent.com";
+
+        url.searchParams.set("dl", "1");
+    }
+
+    // GitHub: file page -> raw file
+    if (host === "github.com") {
+
+        const parts =
+            url.pathname.split("/");
+
+        // /user/repo/blob/branch/path...
+        if (
+            parts[3] === "blob" ||
+            parts[3] === "raw"
+        ) {
+
+            parts.splice(3, 1);
+
+            url =
+                new URL(
+                    "https://raw.githubusercontent.com" +
+                    parts.join("/")
+                );
+        }
+    }
+
+    return url;
+}
+
+
+// Hosts known not to let other websites read shared files
+function unsupportedHostName(url) {
+
+    const host =
+        url.hostname.toLowerCase();
+
+    if (
+        host === "1drv.ms" ||
+        host.endsWith("onedrive.live.com") ||
+        host.endsWith(".sharepoint.com")
+    ) {
+        return "OneDrive / SharePoint";
+    }
+
+    if (
+        host === "drive.google.com" ||
+        host === "docs.google.com"
+    ) {
+        return "Google Drive";
+    }
+
+    return null;
+}
+
+
+// Reads single files out of a .zip that lives on a web server, using HTTP
+// range requests, so only the layers that are switched on get downloaded.
+class RemoteZip {
+
+    constructor(url, entries, size) {
+
+        this.url = url;
+        this.entries = entries;
+
+        // Size of the whole file in bytes
+        this.size = size;
+        this.prefix =
+            findZipPrefix(
+                [...entries.keys()]
+            );
+    }
+
+    // Fetch bytes [start, end] of the file
+    static async fetchRange(url, start, end) {
+
+        const response =
+            await fetch(
+                url,
+                {
+                    headers: {
+                        Range: `bytes=${start}-${end}`
+                    }
+                }
+            );
+
+        if (!response.ok) {
+
+            throw new Error(
+                `The link returned an error (HTTP ${response.status}).`
+            );
+        }
+
+        const bytes =
+            new Uint8Array(
+                await response.arrayBuffer()
+            );
+
+        // Server ignored the range and sent the whole file
+        if (response.status === 200) {
+
+            return bytes.subarray(
+                start,
+                end + 1
+            );
+        }
+
+        return bytes;
+    }
+
+    // Build from the last bytes of the file (which hold the zip's table of contents)
+    static async fromTail(url, tail) {
+
+        const view =
+            new DataView(
+                tail.buffer,
+                tail.byteOffset,
+                tail.byteLength
+            );
+
+        // End-of-central-directory record
+        let eocd = -1;
+
+        for (
+            let i = tail.length - 22;
+            i >= 0;
+            i--
+        ) {
+
+            if (
+                view.getUint32(i, true) === 0x06054b50
+            ) {
+
+                eocd = i;
+
+                break;
+            }
+        }
+
+        if (eocd < 0) {
+
+            throw new Error(
+                "The link didn't return a .ulviewer (zip) file."
+            );
+        }
+
+        let directorySize =
+            view.getUint32(eocd + 12, true);
+
+        let directoryOffset =
+            view.getUint32(eocd + 16, true);
+
+        // Bytes from the end-of-directory record to the end of the file
+        const ending =
+            tail.length - eocd;
+
+        // The directory sits just before that record, so this gives the file size
+        let size =
+            directoryOffset +
+            directorySize +
+            ending;
+
+        // Zip64 (more than 4 GB or 65,535 files)
+        if (
+            directorySize === 0xffffffff ||
+            directoryOffset === 0xffffffff ||
+            view.getUint16(eocd + 10, true) === 0xffff
+        ) {
+
+            const locator = eocd - 20;
+
+            if (
+                locator < 0 ||
+                view.getUint32(locator, true) !== 0x07064b50
+            ) {
+
+                throw new Error(
+                    "Couldn't read the zip file's table of contents."
+                );
+            }
+
+            const recordOffset =
+                Number(
+                    view.getBigUint64(locator + 8, true)
+                );
+
+            const record =
+                await RemoteZip.fetchRange(
+                    url,
+                    recordOffset,
+                    recordOffset + 55
+                );
+
+            const recordView =
+                new DataView(
+                    record.buffer,
+                    record.byteOffset,
+                    record.byteLength
+                );
+
+            directorySize =
+                Number(
+                    recordView.getBigUint64(40, true)
+                );
+
+            directoryOffset =
+                Number(
+                    recordView.getBigUint64(48, true)
+                );
+
+            // Zip64 record (56 bytes) + its locator (20 bytes) come before the ending
+            size =
+                recordOffset +
+                76 +
+                ending;
+        }
+
+        const directory =
+            await RemoteZip.fetchRange(
+                url,
+                directoryOffset,
+                directoryOffset + directorySize - 1
+            );
+
+        return new RemoteZip(
+            url,
+            RemoteZip.parseDirectory(directory),
+            size
+        );
+    }
+
+    static parseDirectory(directory) {
+
+        const view =
+            new DataView(
+                directory.buffer,
+                directory.byteOffset,
+                directory.byteLength
+            );
+
+        const decoder =
+            new TextDecoder("utf-8");
+
+        const entries =
+            new Map();
+
+        let pos = 0;
+
+        while (
+            pos + 46 <= directory.length &&
+            view.getUint32(pos, true) === 0x02014b50
+        ) {
+
+            const method =
+                view.getUint16(pos + 10, true);
+
+            let compressedSize =
+                view.getUint32(pos + 20, true);
+
+            let size =
+                view.getUint32(pos + 24, true);
+
+            const nameLength =
+                view.getUint16(pos + 28, true);
+
+            const extraLength =
+                view.getUint16(pos + 30, true);
+
+            const commentLength =
+                view.getUint16(pos + 32, true);
+
+            let offset =
+                view.getUint32(pos + 42, true);
+
+            const name =
+                decoder.decode(
+                    directory.subarray(
+                        pos + 46,
+                        pos + 46 + nameLength
+                    )
+                );
+
+            // Zip64 sizes/offsets live in an extra field
+            let extra =
+                pos + 46 + nameLength;
+
+            const extraEnd =
+                extra + extraLength;
+
+            while (extra + 4 <= extraEnd) {
+
+                const id =
+                    view.getUint16(extra, true);
+
+                const length =
+                    view.getUint16(extra + 2, true);
+
+                if (id === 0x0001) {
+
+                    let field = extra + 4;
+
+                    if (size === 0xffffffff) {
+
+                        size =
+                            Number(
+                                view.getBigUint64(field, true)
+                            );
+
+                        field += 8;
+                    }
+
+                    if (compressedSize === 0xffffffff) {
+
+                        compressedSize =
+                            Number(
+                                view.getBigUint64(field, true)
+                            );
+
+                        field += 8;
+                    }
+
+                    if (offset === 0xffffffff) {
+
+                        offset =
+                            Number(
+                                view.getBigUint64(field, true)
+                            );
+                    }
+                }
+
+                extra += 4 + length;
+            }
+
+            entries.set(
+                name,
+                {
+                    method,
+                    compressedSize,
+                    offset,
+                    nameLength,
+                    extraLength
+                }
+            );
+
+            pos +=
+                46 +
+                nameLength +
+                extraLength +
+                commentLength;
+        }
+
+        return entries;
+    }
+
+    // Download and unpack one file from the zip
+    async read(path) {
+
+        const entry =
+            this.entries.get(
+                this.prefix + path
+            );
+
+        if (!entry) {
+
+            throw new Error(
+                `"${path}" is missing from the dataset.`
+            );
+        }
+
+        // Local header (30 bytes + name + extra field) comes before the data.
+        // Its extra field can be longer than the one in the directory, so ask
+        // for a little more than expected.
+        const guess =
+            30 +
+            entry.nameLength +
+            entry.extraLength +
+            256;
+
+        let bytes =
+            await RemoteZip.fetchRange(
+                this.url,
+                entry.offset,
+                entry.offset + guess + entry.compressedSize - 1
+            );
+
+        const view =
+            new DataView(
+                bytes.buffer,
+                bytes.byteOffset,
+                bytes.byteLength
+            );
+
+        if (
+            bytes.length < 30 ||
+            view.getUint32(0, true) !== 0x04034b50
+        ) {
+
+            throw new Error(
+                `Couldn't read "${path}" from the dataset.`
+            );
+        }
+
+        const dataStart =
+            30 +
+            view.getUint16(26, true) +
+            view.getUint16(28, true);
+
+        let data;
+
+        if (
+            dataStart + entry.compressedSize <= bytes.length
+        ) {
+
+            data =
+                bytes.subarray(
+                    dataStart,
+                    dataStart + entry.compressedSize
+                );
+
+        } else {
+
+            data =
+                await RemoteZip.fetchRange(
+                    this.url,
+                    entry.offset + dataStart,
+                    entry.offset + dataStart + entry.compressedSize - 1
+                );
+        }
+
+        // Stored (how UnumLocalia writes .ulviewer files)
+        if (entry.method === 0) {
+            return data;
+        }
+
+        // Deflated (e.g. zipped by hand)
+        if (entry.method === 8) {
+            return pako.inflateRaw(data);
+        }
+
+        throw new Error(
+            `"${path}" uses a zip compression method that isn't supported.`
+        );
+    }
+}
+
+
+// File size for display
+function formatSize(bytes) {
+
+    if (bytes >= 1e9) {
+        return `${(bytes / 1e9).toFixed(1)} GB`;
+    }
+
+    if (bytes >= 1e7) {
+        return `${Math.round(bytes / 1e6)} MB`;
+    }
+
+    return `${(bytes / 1e6).toFixed(1)} MB`;
+}
+
+
+// Download a whole response, reporting progress
+async function downloadWithProgress(response, knownTotal = 0) {
+
+    const total =
+        knownTotal ||
+        Number(
+            response.headers.get("Content-Length")
+        ) || 0;
+
+    if (!response.body) {
+        return await response.blob();
+    }
+
+    const reader =
+        response.body.getReader();
+
+    const chunks = [];
+
+    let received = 0;
+
+    while (true) {
+
+        const { done, value } =
+            await reader.read();
+
+        if (done) {
+            break;
+        }
+
+        chunks.push(value);
+
+        received += value.length;
+
+        showStatus(
+            total
+                ? `Downloading dataset… ${formatSize(received)} of ${formatSize(total)}`
+                : `Downloading dataset… ${formatSize(received)}`
+        );
+    }
+
+    return new Blob(chunks);
+}
+
+
+// Open a .ulviewer / .zip that lives at a web address
+async function openRemoteArchive(url) {
+
+    let response;
+
+    try {
+
+        // Ask for the end of the file only (the zip's table of contents)
+        response =
+            await fetch(
+                url,
+                {
+                    headers: {
+                        Range: "bytes=-66000"
+                    }
+                }
+            );
+
+    } catch (error) {
+
+        // Some hosts refuse partial requests from other websites; try a plain download
+        response =
+            await fetch(url);
+    }
+
+    if (!response.ok) {
+
+        throw new Error(
+            response.status === 404
+                ? "Nothing was found at that link (HTTP 404). Check it is shared with 'anyone with the link'."
+                : `The link returned an error (HTTP ${response.status}).`
+        );
+    }
+
+    // Partial content: stream the dataset, fetching layers on demand
+    if (response.status === 206) {
+
+        const tail =
+            new Uint8Array(
+                await response.arrayBuffer()
+            );
+
+        remoteZip =
+            await RemoteZip.fromTail(
+                url,
+                tail
+            );
+
+        loadedZip = null;
+        datasetRoot = "";
+        zipPrefix = "";
+
+        metadata =
+            JSON.parse(
+                new TextDecoder().decode(
+                    await remoteZip.read("metadata.json")
+                )
+            );
+
+        await initialiseDataset();
+
+        return;
+    }
+
+    // Host sent the whole file: download it all, then open it like a local file
+    const blob =
+        await downloadWithProgress(response);
+
+    const start =
+        new Uint8Array(
+            await blob.slice(0, 2).arrayBuffer()
+        );
+
+    if (
+        start[0] !== 0x50 ||
+        start[1] !== 0x4b
+    ) {
+
+        throw new Error(
+            "The link didn't return a .ulviewer (zip) file. Make sure it points to the file itself and is shared with 'anyone with the link'."
+        );
+    }
+
+    await loadUlviewer(blob);
+
+    downloadedBlob = blob;
+}
+
+
+// Open an exported dataset folder that is hosted on the web
+async function openRemoteFolder(url) {
+
+    const root =
+        url.href
+            .split(/[?#]/)[0]
+            .replace(/metadata\.json$/, "")
+            .replace(/\/+$/, "");
+
+    const response =
+        await fetch(
+            `${root}/metadata.json`
+        );
+
+    if (!response.ok) {
+
+        throw new Error(
+            `No metadata.json was found at that link (HTTP ${response.status}).`
+        );
+    }
+
+    metadata =
+        await response.json();
+
+    loadedZip = null;
+    remoteZip = null;
+    zipPrefix = "";
+
+    datasetRoot = root;
+
+    await initialiseDataset();
+}
+
+
+// Load whatever the link points to
+async function loadFromLink(rawLink) {
+
+    rawLink = rawLink.trim();
+
+    if (!rawLink) {
+        return;
+    }
+
+    const copyBtn =
+        document.getElementById("copyShareLinkBtn");
+
+    copyBtn.style.display = "none";
+
+    const downloadBtn =
+        document.getElementById("downloadAllBtn");
+
+    const saveBtn =
+        document.getElementById("saveFileBtn");
+
+    downloadBtn.style.display = "none";
+    saveBtn.style.display = "none";
+
+    let url;
+
+    try {
+
+        url =
+            normaliseDataUrl(rawLink);
+
+    } catch (error) {
+
+        showStatus(
+            error.message,
+            true
+        );
+
+        return;
+    }
+
+    showStatus(
+        "Loading dataset from link…"
+    );
+
+    try {
+
+        const lastPart =
+            url.pathname.split("/").pop();
+
+        const isFolder =
+            lastPart === "metadata.json" ||
+            !lastPart.includes(".");
+
+        if (isFolder) {
+
+            await openRemoteFolder(url);
+
+        } else {
+
+            await openRemoteArchive(url);
+        }
+
+    } catch (error) {
+
+        console.error(error);
+
+        const blockedHost =
+            unsupportedHostName(url);
+
+        let message;
+
+        if (blockedHost) {
+
+            message =
+                `${blockedHost} doesn't let other websites read shared files, so this link can't be opened here. ` +
+                "Use a Dropbox link instead, or download the file and open it with 'Choose file'.";
+
+        } else if (error instanceof TypeError) {
+
+            // fetch() itself failed: offline, or the host blocks cross-site reads (CORS)
+            message =
+                "Couldn't read that link. Check it is shared with 'anyone with the link'. " +
+                "Some hosts don't let other websites read their files (Dropbox links work; OneDrive and Google Drive links don't). " +
+                "You can also download the file and open it with 'Choose file'.";
+
+        } else {
+
+            message =
+                error.message;
+        }
+
+        showStatus(
+            message,
+            true
+        );
+
+        return;
+    }
+
+    hideStatus();
+
+    currentDataLink = rawLink;
+
+    // Put the link in the address bar so the page address itself can be shared
+    history.replaceState(
+        null,
+        "",
+        "#data=" + encodeURIComponent(rawLink)
+    );
+
+    copyBtn.style.display = "";
+
+    // Streaming from the link: offer to fetch the whole file for faster layer loading
+    if (remoteZip) {
+
+        downloadBtn.textContent =
+            `Download all (${formatSize(remoteZip.size)})`;
+
+        downloadBtn.style.display = "";
+    }
+
+    // A .ulviewer file (streamed or already downloaded) can be saved to disk
+    if (
+        remoteZip ||
+        downloadedBlob
+    ) {
+
+        saveBtn.style.display = "";
+    }
+
+    // Mobile-specific conditions
+    if (
+        window.innerWidth <= 768
+    ) {
+
+        showMobileTopSection(
+            "displaySection"
+        );
+    }
+
+    // Count number of datasets loaded from a link (the link itself is not recorded)
+    window.goatcounter?.count({
+        path: "event/link-loaded",
+        title: "Link Dataset Loaded"
+    });
+}
+
+
+// Forget the link when a local file or the demo is opened instead
+function clearDataLink() {
+
+    currentDataLink = null;
+
+    document
+        .getElementById("copyShareLinkBtn")
+        .style.display = "none";
+
+    document
+        .getElementById("downloadAllBtn")
+        .style.display = "none";
+
+    document
+        .getElementById("saveFileBtn")
+        .style.display = "none";
+
+    downloadedBlob = null;
+
+    if (location.hash.startsWith("#data=")) {
+
+        history.replaceState(
+            null,
+            "",
+            location.pathname + location.search
+        );
+    }
+}
+
+
+// Link named in the page address (#data=...)
+function getLinkFromAddress() {
+
+    const match =
+        location.hash.match(/^#data=(.+)$/);
+
+    if (!match) {
+        return null;
+    }
+
+    try {
+
+        return decodeURIComponent(match[1]);
+
+    } catch (error) {
+
+        return match[1];
+    }
+}
+
+function loadFromAddress() {
+
+    const link =
+        getLinkFromAddress();
+
+    if (
+        !link ||
+        link === currentDataLink
+    ) {
+        return;
+    }
+
+    if (link === "demo") {
+
+        loadDemoDataset();
+
+        return;
+    }
+
+    document
+        .getElementById("dataLinkInput")
+        .value = link;
+
+    loadFromLink(link);
+}
+
+document
+    .getElementById("loadLinkBtn")
+    .addEventListener(
+        "click",
+        () =>
+            loadFromLink(
+                document
+                    .getElementById("dataLinkInput")
+                    .value
+            )
+    );
+
+document
+    .getElementById("dataLinkInput")
+    .addEventListener(
+        "keydown",
+        event => {
+
+            if (event.key === "Enter") {
+
+                loadFromLink(
+                    event.target.value
+                );
+            }
+        }
+    );
+
+// Copy a viewer link that opens this dataset
+document
+    .getElementById("copyShareLinkBtn")
+    .addEventListener(
+        "click",
+        async event => {
+
+            const shareLink =
+                location.href.split("#")[0] +
+                "#data=" +
+                encodeURIComponent(currentDataLink);
+
+            try {
+
+                await navigator.clipboard.writeText(
+                    shareLink
+                );
+
+                event.target.textContent = "Copied!";
+
+                setTimeout(
+                    () => {
+                        event.target.textContent = "Copy share link";
+                    },
+                    1500
+                );
+
+            } catch (error) {
+
+                // Clipboard not available: show the link to copy by hand
+                window.prompt(
+                    "Copy this link:",
+                    shareLink
+                );
+            }
+        }
+    );
+
+// Download the whole linked dataset into this browser tab, so layers no
+// longer have to be fetched one at a time. Nothing is uploaded; loaded
+// layers stay as they are. Returns true once the whole file is held here.
+async function downloadWholeDataset() {
+
+    if (downloadedBlob) {
+        return true;
+    }
+
+    const source = remoteZip;
+
+    if (!source) {
+        return false;
+    }
+
+    const buttons = [
+        document.getElementById("downloadAllBtn"),
+        document.getElementById("saveFileBtn")
+    ];
+
+    buttons.forEach(
+        button => {
+            button.disabled = true;
+        }
+    );
+
+    try {
+
+        showStatus(
+            "Downloading dataset…"
+        );
+
+        const response =
+            await fetch(source.url);
+
+        if (!response.ok) {
+
+            throw new Error(
+                `HTTP ${response.status}`
+            );
+        }
+
+        const blob =
+            await downloadWithProgress(
+                response,
+                source.size
+            );
+
+        const zip =
+            await JSZip.loadAsync(blob);
+
+        // A different dataset was opened while this was downloading
+        if (remoteZip !== source) {
+            return false;
+        }
+
+        // Read from the downloaded copy from now on
+        zipPrefix =
+            findZipPrefix(
+                Object.keys(zip.files)
+            );
+
+        loadedZip = zip;
+        remoteZip = null;
+
+        downloadedBlob = blob;
+
+        buttons[0].style.display = "none";
+
+        // Count number of full downloads (the link itself is not recorded)
+        window.goatcounter?.count({
+            path: "event/link-download-all",
+            title: "Link Dataset Downloaded"
+        });
+
+        return true;
+
+    } catch (error) {
+
+        console.error(error);
+
+        if (remoteZip === source) {
+
+            showStatus(
+                "Couldn't download the whole dataset. Layers will keep loading from the link one at a time.",
+                true
+            );
+        }
+
+        return false;
+
+    } finally {
+
+        buttons.forEach(
+            button => {
+                button.disabled = false;
+            }
+        );
+    }
+}
+
+
+// File name to save the linked dataset under
+function getDatasetFileName() {
+
+    let name = "";
+
+    try {
+
+        name =
+            decodeURIComponent(
+                new URL(currentDataLink)
+                    .pathname
+                    .split("/")
+                    .pop()
+            );
+
+    } catch (error) {
+
+        name = "";
+    }
+
+    // Keep it a plain file name
+    name =
+        name.replace(/[\\/:*?"<>|]/g, "_");
+
+    if (!/\.(ulviewer|zip)$/i.test(name)) {
+
+        name =
+            `${name || metadata?.core || "dataset"}.ulviewer`;
+    }
+
+    return name;
+}
+
+
+// Load the whole dataset into the tab (faster layer switching)
+document
+    .getElementById("downloadAllBtn")
+    .addEventListener(
+        "click",
+        async () => {
+
+            if (
+                await downloadWholeDataset()
+            ) {
+
+                showStatus(
+                    `Whole dataset downloaded (${formatSize(downloadedBlob.size)}). Layers now load from this device.`
+                );
+
+                hideStatus(4000);
+            }
+        }
+    );
+
+
+// Save the linked .ulviewer file to the computer (browser's downloads folder)
+document
+    .getElementById("saveFileBtn")
+    .addEventListener(
+        "click",
+        async () => {
+
+            // Fetch the whole file first if it hasn't been already
+            if (
+                !(await downloadWholeDataset())
+            ) {
+                return;
+            }
+
+            const fileName =
+                getDatasetFileName();
+
+            const link =
+                document.createElement("a");
+
+            link.href =
+                URL.createObjectURL(downloadedBlob);
+
+            link.download = fileName;
+
+            link.click();
+
+            // Give the browser time to start saving before releasing the address
+            setTimeout(
+                () => URL.revokeObjectURL(link.href),
+                60000
+            );
+
+            showStatus(
+                `Saving ${fileName} (${formatSize(downloadedBlob.size)}) to your downloads folder. Open it later with 'Choose file'.`
+            );
+
+            hideStatus(6000);
+
+            // Count number of datasets saved to disk (the link itself is not recorded)
+            window.goatcounter?.count({
+                path: "event/link-save-file",
+                title: "Link Dataset Saved"
+            });
+        }
+    );
+
+window.addEventListener(
+    "hashchange",
+    loadFromAddress
+);
+
+
+// ======================================================================
+// Cell info: protein expression inside a cell
+// ======================================================================
+
+const measureCanvas =
+    document.createElement("canvas");
+
+// Mean intensity of each loaded protein inside the cell outline.
+// Values come from the exported 8-bit images, where 0-255 spans the
+// min-max display thresholds chosen at export, so they are relative
+// (0-100% of that range) rather than raw instrument counts.
+function measureProteinsInCell(cell) {
+
+    const results = {};
+
+    if (!cell.vertices.length) {
+        return results;
+    }
+
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+
+    for (
+        const vertex
+        of cell.vertices
+    ) {
+
+        minX = Math.min(minX, vertex[0]);
+        minY = Math.min(minY, vertex[1]);
+        maxX = Math.max(maxX, vertex[0]);
+        maxY = Math.max(maxY, vertex[1]);
+    }
+
+    for (
+        const marker
+        in proteinLayers
+    ) {
+
+        const image =
+            proteinLayers[marker].image;
+
+        // Protein images can be a different size to the H&E image
+        const scaleX =
+            image.naturalWidth / metadata.image.width;
+
+        const scaleY =
+            image.naturalHeight / metadata.image.height;
+
+        const x0 =
+            Math.max(
+                0,
+                Math.floor(minX * scaleX)
+            );
+
+        const y0 =
+            Math.max(
+                0,
+                Math.floor(minY * scaleY)
+            );
+
+        const x1 =
+            Math.min(
+                image.naturalWidth,
+                Math.ceil(maxX * scaleX)
+            );
+
+        const y1 =
+            Math.min(
+                image.naturalHeight,
+                Math.ceil(maxY * scaleY)
+            );
+
+        const width = x1 - x0;
+        const height = y1 - y0;
+
+        if (
+            width <= 0 ||
+            height <= 0
+        ) {
+            continue;
+        }
+
+        measureCanvas.width = width;
+        measureCanvas.height = height;
+
+        const ctx =
+            measureCanvas.getContext(
+                "2d",
+                {
+                    willReadFrequently: true
+                }
+            );
+
+        ctx.drawImage(
+            image,
+            x0,
+            y0,
+            width,
+            height,
+            0,
+            0,
+            width,
+            height
+        );
+
+        const pixels =
+            ctx.getImageData(
+                0,
+                0,
+                width,
+                height
+            ).data;
+
+        let sum = 0;
+        let count = 0;
+
+        for (
+            let py = 0;
+            py < height;
+            py++
+        ) {
+
+            for (
+                let px = 0;
+                px < width;
+                px++
+            ) {
+
+                // Pixel centre, in H&E image coordinates
+                if (
+                    pointInPolygon(
+                        (x0 + px + 0.5) / scaleX,
+                        (y0 + py + 0.5) / scaleY,
+                        cell.vertices
+                    )
+                ) {
+
+                    sum +=
+                        pixels[
+                            (py * width + px) * 4
+                        ];
+
+                    count++;
+                }
+            }
+        }
+
+        if (count) {
+
+            results[marker] =
+                sum / count / 255 * 100;
+        }
+    }
+
+    return results;
+}
+
+
+// Fill the cell info panel
+function renderCellInfo(cell) {
+
+    const area =
+        calculatePolygonArea(
+            cell.vertices
+        );
+
+    const centroid =
+        calculateCentroid(
+            cell.vertices
+        );
+
+    const lines = [
+        "<b>Cell Selected</b>",
+        `Cell ID: ${escapeHtml(cell.cell_id ?? "Unknown")}`
+    ];
+
+    // CLUSTERS (disabled for now)
+    // // Cluster (if cells are filled by one)
+    // if (activeAnnotation) {
+    //
+    //     const label =
+    //         cellLabels[
+    //             segmentationData.indexOf(cell)
+    //         ];
+    //
+    //     lines.push(
+    //         `${escapeHtml(activeAnnotation)}: ${escapeHtml(label ?? "–")}`
+    //     );
+    // }
+
+    lines.push(
+        `Vertices: ${cell.vertices.length}`
+    );
+
+    const pixelSize =
+        metadata.web_pixel_size_um;
+
+    lines.push(
+        pixelSize
+            ? `Area: ${Math.round(area * pixelSize * pixelSize)} µm² (${Math.round(area)} px²)`
+            : `Area: ${Math.round(area)} px²`
+    );
+
+    lines.push(
+        `Centroid: (${Math.round(centroid.x)}, ${Math.round(centroid.y)})`
+    );
+
+    // Gene counts
+    const transcriptCount =
+        countGenesInCell(cell);
+
+    lines.push(
+        "<b>Genes</b> <span class=\"cell-info-note\">(transcripts)</span>"
+    );
+
+    const geneNames =
+        Object.keys(transcriptCount);
+
+    if (geneNames.length) {
+
+        for (
+            const gene
+            of geneNames
+        ) {
+
+            lines.push(
+                `${escapeHtml(gene)}: ${transcriptCount[gene]}`
+            );
+        }
+
+    } else {
+
+        lines.push(
+            "<span class=\"cell-info-note\">Switch on genes to count them</span>"
+        );
+    }
+
+    // Protein expression
+    const proteinMeans =
+        measureProteinsInCell(cell);
+
+    lines.push(
+        "<b>Proteins</b> <span class=\"cell-info-note\" title=\"Mean pixel intensity inside the cell outline, as a percentage of the display range the image was exported with\">(mean intensity)</span>"
+    );
+
+    const markers =
+        Object.keys(proteinMeans);
+
+    if (markers.length) {
+
+        for (
+            const marker
+            of markers
+        ) {
+
+            lines.push(
+                `${escapeHtml(marker)}: ${proteinMeans[marker].toFixed(1)}%`
+            );
+        }
+
+    } else {
+
+        lines.push(
+            "<span class=\"cell-info-note\">Switch on proteins to measure them</span>"
+        );
+    }
+
+    cellInfo.innerHTML =
+        lines.join("<br>");
+}
+
+
+// ======================================================================
+// CLUSTERS (disabled for now)
+//
+// Everything between the /* and */ below is switched off. To bring cell
+// fills back: delete those two markers, and un-comment the other places
+// marked "CLUSTERS (disabled for now)" in this file, index.html and styles.css.
+// ======================================================================
+
+/*
+
+// ======================================================================
+// Cell fills: colour cells by cluster (or any per-cell category)
+//
+// Clusters can come from
+//   - the dataset: extra properties on each cell in the segmentation file
+//     (e.g. "cluster"), or files listed under "cell_annotations" in
+//     metadata.json ({ "name": "path/to/file.csv" }), or
+//   - a CSV the user picks: one column of cell IDs plus one or more
+//     cluster columns, e.g. UnumLocalia's cluster_assignments.csv or
+//     Xenium's clusters.csv (Barcode, Cluster).
+// ======================================================================
+
+const CLUSTER_COLORS = [
+    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+    "#8c564b", "#e377c2", "#17becf", "#bcbd22", "#7f7f7f",
+    "#aec7e8", "#ffbb78", "#98df8a", "#ff9896", "#c5b0d5",
+    "#c49c94", "#f7b6d2", "#9edae5", "#dbdb8d", "#c7c7c7"
+];
+
+// Columns with more distinct values than this aren't treated as clusters
+const MAX_CLUSTERS = 150;
+
+const cellFillSelect =
+    document.getElementById("cellFillSelect");
+
+const clusterLegend =
+    document.getElementById("clusterLegend");
+
+
+function resetCellAnnotations() {
+
+    cellAnnotations = {};
+
+    setActiveAnnotation("");
+
+    refreshCellFillOptions();
+}
+
+
+// Find annotations supplied with the dataset (called once cells are loaded)
+function initCellAnnotations() {
+
+    cellAnnotations = {};
+
+    // Extra properties on the cells themselves
+    const first =
+        segmentationData[0] || {};
+
+    for (
+        const key
+        of Object.keys(first)
+    ) {
+
+        if (
+            key === "cell_id" ||
+            key === "vertices" ||
+            (
+                typeof first[key] !== "string" &&
+                typeof first[key] !== "number"
+            )
+        ) {
+            continue;
+        }
+
+        const map = new Map();
+
+        for (
+            const cell
+            of segmentationData
+        ) {
+
+            if (
+                cell[key] !== undefined &&
+                cell[key] !== null &&
+                cell[key] !== ""
+            ) {
+
+                map.set(
+                    String(cell.cell_id),
+                    String(cell[key])
+                );
+            }
+        }
+
+        if (
+            new Set(map.values()).size <= MAX_CLUSTERS
+        ) {
+
+            cellAnnotations[key] = map;
+        }
+    }
+
+    // Files listed in metadata.json (loaded when chosen)
+    for (
+        const [name, path]
+        of Object.entries(
+            metadata.cell_annotations || {}
+        )
+    ) {
+
+        cellAnnotations[name] = path;
+    }
+
+    refreshCellFillOptions();
+}
+
+
+function refreshCellFillOptions() {
+
+    cellFillSelect.innerHTML = "";
+
+    const addOption = (value, text) => {
+
+        const option =
+            document.createElement("option");
+
+        option.value = value;
+        option.textContent = text;
+
+        cellFillSelect.appendChild(option);
+    };
+
+    addOption("", "None");
+
+    for (
+        const name
+        of Object.keys(cellAnnotations)
+    ) {
+
+        addOption(
+            "a:" + name,
+            name
+        );
+    }
+
+    addOption(
+        "csv",
+        "Load clusters (CSV)…"
+    );
+
+    cellFillSelect.value =
+        activeAnnotation
+            ? "a:" + activeAnnotation
+            : "";
+}
+
+
+// Read a table of cell IDs and cluster labels.
+// Returns { columnName: Map(cell_id -> label) }
+function parseClusterTable(text, fallbackName) {
+
+    const rows =
+        text
+            .replace(/^﻿/, "")
+            .split(/\r?\n/)
+            .filter(
+                line => line.trim() !== ""
+            );
+
+    if (rows.length < 2) {
+
+        throw new Error(
+            "The cluster file is empty."
+        );
+    }
+
+    const delimiter =
+        rows[0].includes("\t")
+            ? "\t"
+            : rows[0].includes(";") && !rows[0].includes(",")
+                ? ";"
+                : ",";
+
+    const split = line =>
+        line
+            .split(delimiter)
+            .map(
+                value =>
+                    value
+                        .trim()
+                        .replace(/^"(.*)"$/, "$1")
+            );
+
+    const header =
+        split(rows[0]);
+
+    // Column holding the cell IDs
+    let idColumn =
+        header.findIndex(
+            name =>
+                /^(cell[_ ]?ids?|barcodes?|cells?|ids?|)$/i.test(name)
+        );
+
+    if (idColumn < 0) {
+        idColumn = 0;
+    }
+
+    const maps =
+        header.map(
+            () => new Map()
+        );
+
+    for (
+        let r = 1;
+        r < rows.length;
+        r++
+    ) {
+
+        const values =
+            split(rows[r]);
+
+        const id =
+            values[idColumn];
+
+        for (
+            let c = 0;
+            c < header.length;
+            c++
+        ) {
+
+            if (
+                c !== idColumn &&
+                values[c] !== undefined &&
+                values[c] !== ""
+            ) {
+
+                maps[c].set(
+                    id,
+                    values[c]
+                );
+            }
+        }
+    }
+
+    const result = {};
+
+    header.forEach(
+        (name, c) => {
+
+            if (
+                c === idColumn ||
+                !maps[c].size ||
+                new Set(maps[c].values()).size > MAX_CLUSTERS
+            ) {
+                return;
+            }
+
+            result[
+                name ||
+                fallbackName
+            ] = maps[c];
+        }
+    );
+
+    if (!Object.keys(result).length) {
+
+        throw new Error(
+            `No cluster column was found in the file (a column needs ${MAX_CLUSTERS} or fewer different values).`
+        );
+    }
+
+    return result;
+}
+
+
+// Bytes -> text, unpacking .gz if needed
+function bytesToText(bytes) {
+
+    if (
+        bytes[0] === 0x1f &&
+        bytes[1] === 0x8b
+    ) {
+
+        return pako.inflate(
+            bytes,
+            {
+                to: "string"
+            }
+        );
+    }
+
+    return new TextDecoder().decode(bytes);
+}
+
+
+// How many loaded cells have a label in this annotation
+function countMatchedCells(map) {
+
+    let matched = 0;
+
+    for (
+        const cell
+        of segmentationData
+    ) {
+
+        if (
+            map.has(
+                String(cell.cell_id)
+            )
+        ) {
+            matched++;
+        }
+    }
+
+    return matched;
+}
+
+
+// Sort labels so that 2 comes before 10
+function sortLabels(labels) {
+
+    return labels.sort(
+        (a, b) =>
+            a.localeCompare(
+                b,
+                undefined,
+                {
+                    numeric: true
+                }
+            )
+    );
+}
+
+
+// Choose which annotation fills the cells ("" = none)
+function setActiveAnnotation(name) {
+
+    activeAnnotation = name;
+
+    cellLabels = [];
+    clusterColors = {};
+    clusterCounts = {};
+    hiddenClusters = new Set();
+
+    if (name) {
+
+        const map =
+            cellAnnotations[name];
+
+        cellLabels =
+            segmentationData.map(
+                cell =>
+                    map.get(
+                        String(cell.cell_id)
+                    )
+            );
+
+        for (
+            const label
+            of cellLabels
+        ) {
+
+            if (label !== undefined) {
+
+                clusterCounts[label] =
+                    (clusterCounts[label] || 0) + 1;
+            }
+        }
+
+        sortLabels(
+            Object.keys(clusterCounts)
+        ).forEach(
+            (label, index) => {
+
+                clusterColors[label] =
+                    index < CLUSTER_COLORS.length
+                        ? CLUSTER_COLORS[index]
+                        // Beyond the palette: evenly spread hues
+                        : hslToHex(
+                            (index * 137.508) % 360,
+                            65,
+                            index % 2 ? 45 : 65
+                        );
+            }
+        );
+    }
+
+    document
+        .getElementById("cellFillOpacityItem")
+        .style.display =
+            name ? "" : "none";
+
+    renderClusterLegend();
+
+    if (selectedCell) {
+        renderCellInfo(selectedCell);
+    }
+
+    updateOverlay();
+}
+
+
+function hslToHex(h, s, l) {
+
+    s /= 100;
+    l /= 100;
+
+    const f = n => {
+
+        const k =
+            (n + h / 30) % 12;
+
+        const value =
+            l -
+            s *
+            Math.min(l, 1 - l) *
+            Math.max(
+                -1,
+                Math.min(k - 3, 9 - k, 1)
+            );
+
+        return Math.round(value * 255)
+            .toString(16)
+            .padStart(2, "0");
+    };
+
+    return `#${f(0)}${f(8)}${f(4)}`;
+}
+
+
+// Legend over the viewer: colour, show/hide and cell count per cluster
+function renderClusterLegend() {
+
+    if (!activeAnnotation) {
+
+        clusterLegend.style.display = "none";
+
+        return;
+    }
+
+    const labels =
+        sortLabels(
+            Object.keys(clusterCounts)
+        );
+
+    clusterLegend.innerHTML =
+        `<div class="legend-title">${escapeHtml(activeAnnotation)}</div>` +
+        labels
+            .map(
+                (label, index) =>
+                    `<label class="legend-row">
+                        <input type="checkbox" data-index="${index}" checked>
+                        <input type="color" data-index="${index}" value="${clusterColors[label]}">
+                        <span class="legend-label">${escapeHtml(label)}</span>
+                        <span class="legend-count">${clusterCounts[label].toLocaleString()}</span>
+                    </label>`
+            )
+            .join("");
+
+    clusterLegend
+        .querySelectorAll("input[type='checkbox']")
+        .forEach(
+            box =>
+                box.addEventListener(
+                    "change",
+                    () => {
+
+                        const label =
+                            labels[box.dataset.index];
+
+                        if (box.checked) {
+                            hiddenClusters.delete(label);
+                        } else {
+                            hiddenClusters.add(label);
+                        }
+
+                        updateOverlay();
+                    }
+                )
+        );
+
+    clusterLegend
+        .querySelectorAll("input[type='color']")
+        .forEach(
+            picker =>
+                picker.addEventListener(
+                    "input",
+                    () => {
+
+                        clusterColors[
+                            labels[picker.dataset.index]
+                        ] = picker.value;
+
+                        updateOverlay();
+                    }
+                )
+        );
+
+    clusterLegend.style.display = "block";
+}
+
+// Clicking the legend shouldn't select cells or close panels
+clusterLegend.addEventListener(
+    "click",
+    event => event.stopPropagation()
+);
+
+
+// Trace one cell outline as a canvas path
+function traceCellPath(targetCtx, cell) {
+
+    targetCtx.beginPath();
+
+    cell.vertices.forEach(
+        (pt, idx) => {
+
+            const vp =
+                viewer.viewport.imageToViewerElementCoordinates(
+                    new OpenSeadragon.Point(
+                        pt[0],
+                        pt[1]
+                    )
+                );
+
+            if (idx === 0) {
+
+                targetCtx.moveTo(
+                    vp.x,
+                    vp.y
+                );
+
+            } else {
+
+                targetCtx.lineTo(
+                    vp.x,
+                    vp.y
+                );
+            }
+        }
+    );
+
+    targetCtx.closePath();
+}
+
+
+// Fill cells with their cluster colour (drawn under the outlines)
+function drawCellFills(targetCtx) {
+
+    if (!activeAnnotation) {
+        return;
+    }
+
+    targetCtx.globalAlpha =
+        cellFillOpacity;
+
+    segmentationData.forEach(
+        (cell, index) => {
+
+            const label =
+                cellLabels[index];
+
+            if (
+                label === undefined ||
+                hiddenClusters.has(label) ||
+                !cell.vertices.length
+            ) {
+                return;
+            }
+
+            targetCtx.fillStyle =
+                clusterColors[label];
+
+            traceCellPath(
+                targetCtx,
+                cell
+            );
+
+            targetCtx.fill();
+        }
+    );
+
+    targetCtx.globalAlpha = 1;
+}
+
+
+// Legend for screenshots
+function drawClusterLegendToContext(targetCtx) {
+
+    if (!activeAnnotation) {
+        return;
+    }
+
+    const labels =
+        sortLabels(
+            Object.keys(clusterCounts)
+        ).filter(
+            label =>
+                !hiddenClusters.has(label)
+        );
+
+    const rowHeight = 18;
+    const padding = 8;
+    const margin = 20;
+
+    // Only as many rows as fit
+    const maxRows =
+        Math.floor(
+            (
+                targetCtx.canvas.height -
+                2 * margin -
+                2 * padding -
+                rowHeight
+            ) /
+            rowHeight
+        );
+
+    const shown =
+        labels.slice(
+            0,
+            Math.max(0, maxRows)
+        );
+
+    targetCtx.save();
+
+    targetCtx.font =
+        "13px sans-serif";
+
+    targetCtx.textBaseline =
+        "middle";
+
+    const width =
+        Math.max(
+            targetCtx.measureText(activeAnnotation).width,
+            ...shown.map(
+                label =>
+                    targetCtx.measureText(label).width + 20
+            )
+        ) +
+        2 * padding;
+
+    const height =
+        (shown.length + 1) * rowHeight +
+        2 * padding;
+
+    const x = margin;
+
+    const y =
+        targetCtx.canvas.height -
+        margin -
+        height;
+
+    targetCtx.fillStyle =
+        "rgba(0, 0, 0, 0.6)";
+
+    targetCtx.fillRect(
+        x,
+        y,
+        width,
+        height
+    );
+
+    targetCtx.fillStyle = "white";
+
+    targetCtx.font =
+        "bold 13px sans-serif";
+
+    targetCtx.fillText(
+        activeAnnotation,
+        x + padding,
+        y + padding + rowHeight / 2
+    );
+
+    targetCtx.font =
+        "13px sans-serif";
+
+    shown.forEach(
+        (label, index) => {
+
+            const rowY =
+                y +
+                padding +
+                (index + 1.5) * rowHeight;
+
+            targetCtx.fillStyle =
+                clusterColors[label];
+
+            targetCtx.fillRect(
+                x + padding,
+                rowY - 6,
+                12,
+                12
+            );
+
+            targetCtx.fillStyle = "white";
+
+            targetCtx.fillText(
+                label,
+                x + padding + 20,
+                rowY
+            );
+        }
+    );
+
+    targetCtx.restore();
+}
+
+
+// Add annotations from a table and fill by the first one
+function addAnnotationsFromText(text, fallbackName) {
+
+    const tables =
+        parseClusterTable(
+            text,
+            fallbackName
+        );
+
+    let best = null;
+    let bestMatched = 0;
+
+    for (
+        const [name, map]
+        of Object.entries(tables)
+    ) {
+
+        const matched =
+            countMatchedCells(map);
+
+        if (matched > bestMatched) {
+
+            best = name;
+            bestMatched = matched;
+        }
+
+        if (matched) {
+            cellAnnotations[name] = map;
+        }
+    }
+
+    if (!best) {
+
+        const fileId =
+            Object.values(tables)[0]
+                .keys()
+                .next()
+                .value;
+
+        throw new Error(
+            "None of the cell IDs in the cluster file match the loaded cells " +
+            `(file: "${fileId}", cells: "${segmentationData[0]?.cell_id}").`
+        );
+    }
+
+    return {
+        name: best,
+        matched: bestMatched
+    };
+}
+
+
+cellFillSelect.addEventListener(
+    "change",
+    async () => {
+
+        const value =
+            cellFillSelect.value;
+
+        // Pick a CSV file
+        if (value === "csv") {
+
+            // Keep the current choice showing until a file is loaded
+            cellFillSelect.value =
+                activeAnnotation
+                    ? "a:" + activeAnnotation
+                    : "";
+
+            document
+                .getElementById("clusterFile")
+                .click();
+
+            return;
+        }
+
+        const name =
+            value.slice(2);
+
+        try {
+
+            // Annotation file from the dataset that hasn't been read yet
+            if (
+                name &&
+                typeof cellAnnotations[name] === "string"
+            ) {
+
+                const path =
+                    cellAnnotations[name];
+
+                const text =
+                    bytesToText(
+                        await getCompressedFile(path)
+                    );
+
+                let map;
+
+                if (/\.json(\.gz)?$/i.test(path)) {
+
+                    // { cell_id: label }
+                    map =
+                        new Map(
+                            Object.entries(
+                                JSON.parse(text)
+                            ).map(
+                                ([id, label]) => [
+                                    id,
+                                    String(label)
+                                ]
+                            )
+                        );
+
+                } else {
+
+                    // Table: use its first cluster column
+                    map =
+                        Object.values(
+                            parseClusterTable(
+                                text,
+                                name
+                            )
+                        )[0];
+                }
+
+                cellAnnotations[name] = map;
+            }
+
+            setActiveAnnotation(name);
+
+        } catch (error) {
+
+            console.error(error);
+
+            showStatus(
+                error.message,
+                true
+            );
+
+            refreshCellFillOptions();
+        }
+    }
+);
+
+
+document
+    .getElementById("clusterFile")
+    .addEventListener(
+        "change",
+        async event => {
+
+            const file =
+                event.target.files[0];
+
+            // Allow the same file to be picked again later
+            event.target.value = "";
+
+            if (!file) {
+                return;
+            }
+
+            try {
+
+                const text =
+                    bytesToText(
+                        new Uint8Array(
+                            await file.arrayBuffer()
+                        )
+                    );
+
+                const { name, matched } =
+                    addAnnotationsFromText(
+                        text,
+                        file.name.replace(/\.(csv|tsv|txt)(\.gz)?$/i, "")
+                    );
+
+                refreshCellFillOptions();
+
+                setActiveAnnotation(name);
+
+                cellFillSelect.value =
+                    "a:" + name;
+
+                showStatus(
+                    `Clusters loaded for ${matched.toLocaleString()} of ${segmentationData.length.toLocaleString()} cells.`
+                );
+
+                hideStatus(4000);
+
+                // Count number of cluster files loaded
+                window.goatcounter?.count({
+                    path: "event/load-clusters",
+                    title: "Load Clusters"
+                });
+
+            } catch (error) {
+
+                console.error(error);
+
+                showStatus(
+                    error.message,
+                    true
+                );
+            }
+        }
+    );
+
+
+// Fill opacity
+document
+    .getElementById("cellFillOpacity")
+    .addEventListener(
+        "input",
+        event => {
+
+            cellFillOpacity =
+                parseFloat(
+                    event.target.value
+                );
+
+            updateOverlay();
+        }
+    );
+
+*/
+
+
+// Open the dataset named in the page address, if there is one
+loadFromAddress();
